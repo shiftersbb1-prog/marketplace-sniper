@@ -14,62 +14,53 @@ APP_ID = os.environ.get("APP_ID", "").strip()
 CERT_ID = os.environ.get("CERT_ID", "").strip()
 DISCORD_WEBHOOK = os.environ.get("DISCORD_WEBHOOK", "").strip()
 
-# =====================================================================
-# 1. YOUR MASTER WALLET & PROFIT RULES
-# =====================================================================
-MAX_BUDGET_CAD = 250.00     # Maximum total cash (Item + Inbound Shipping) per flip
-MIN_PROFIT_CAD = 45.00      # Minimum net profit in pocket after ALL fees & shipping
-MIN_ROI_PCT = 20.0          # Minimum Return on Investment %
+MAX_BUDGET_CAD = 250.00
+MIN_PROFIT_CAD = 45.00
+MIN_ROI_PCT = 20.0
 
-# =====================================================================
-# 2. REAL-WORLD DEDUCTIONS (CAD)
-# =====================================================================
-EBAY_FEE_RATE = 0.136       # 13.6% eBay Canada standard category fee
-EBAY_FIXED_FEE = 0.30       # $0.30 per order flat fee
-PACKAGING_COST = 4.50       # Box, bubble wrap, packing tape
+EBAY_FEE_RATE = 0.136
+EBAY_FIXED_FEE = 0.30
+PACKAGING_COST = 4.50
 
-# =====================================================================
-# 3. THE 5-ITEM WATCHLIST (Strictly Tuned for Full Working Units)
-# =====================================================================
 WATCHLIST = [
     {
         "name": "Fluke 87V Multimeter",
         "query": "Fluke 87V",
         "must_contain": ["fluke", "87"],
-        "min_valid_price": 120.00,  # Legitimate working units start well above $120
+        "min_valid_price": 120.00,
         "est_outbound_ship": 18.00
     },
     {
         "name": "Fluke 376 FC Clamp Meter",
         "query": "Fluke 376",
         "must_contain": ["fluke", "376"],
-        "min_valid_price": 140.00,  # Kills $80 plastic shells & replacement springs
+        "min_valid_price": 140.00,
         "est_outbound_ship": 18.00
     },
     {
         "name": "New Nintendo 3DS XL",
         "query": '"New Nintendo 3DS XL"',
         "must_contain": ["3ds", "xl"],
-        "min_valid_price": 140.00,  # Kills replacement screens, styluses, and shells
+        "min_valid_price": 140.00,
         "est_outbound_ship": 15.00
     },
     {
         "name": "Garmin inReach Mini 2",
         "query": '"inReach Mini 2"',
         "must_contain": ["inreach", "mini"],
-        "min_valid_price": 150.00,  # Kills backpack mounts, clips, and dummy units
+        "min_valid_price": 150.00,
         "est_outbound_ship": 15.00
     },
     {
         "name": "TI-84 Plus CE Calculator",
         "query": '"TI-84 Plus CE"',
         "must_contain": ["ti-84", "ce"],
-        "min_valid_price": 45.00,   # Kills replacement slide covers and charging cables
+        "min_valid_price": 45.00,
         "est_outbound_ship": 14.00
     }
 ]
 
-# HARDWARE SHIELD: Words that immediately identify parts, accessories, or broken junk
+# --- THE PATCHED SHIELD ---
 HARDWARE_BLACKLIST = [
     "shell", "spring", "springs", "housing", "door", "cover", "faceplate",
     "bracket", "knob", "dial", "switch", "screw", "screws", "battery cover",
@@ -78,7 +69,8 @@ HARDWARE_BLACKLIST = [
     "box only", "empty box", "manual only", "screen only", "display only", "lcd only",
     "motherboard", "main board", "pcb", "fuse", "fuses", "strap", "clip", "mount",
     "for parts", "not working", "parts only", "broken", "defective", "repair",
-    "damaged", "as is", "as-is", "untested", "read description", "cracked", "faulty"
+    "damaged", "as is", "as-is", "untested", "read description", "cracked", "faulty",
+    "enclosure", "enclosures", "empty"
 ]
 
 def get_oauth_token():
@@ -113,7 +105,6 @@ def fetch_item_details(token, item_id):
     return resp.json() if resp.status_code == 200 else {}
 
 def analyze_market(token, target):
-    """Scans 1 market, removes parts/shells, filters outliers, and evaluates profitability."""
     search_resp = requests.get(
         "https://api.ebay.com/buy/browse/v1/item_summary/search",
         headers={
@@ -139,17 +130,14 @@ def analyze_market(token, target):
         title = item.get("title", "")
         title_lower = title.lower()
 
-        # Must contain brand/model identifiers
         if not all(word in title_lower for word in target["must_contain"]):
             continue
 
-        # Hardware Shield: Drop any listing mentioning parts, shells, springs, etc.
         if any(bad_word in title_lower for bad_word in HARDWARE_BLACKLIST):
             continue
 
         price_val = float(item.get("price", {}).get("value", 0))
 
-        # Calculate exact landed shipping
         ship_opts = item.get("shippingOptions", [])
         inbound_ship = 20.00
         if ship_opts:
@@ -159,7 +147,6 @@ def analyze_market(token, target):
 
         total_landed = price_val + inbound_ship
 
-        # Drop anything below the realistic price floor for a complete, working unit
         if total_landed < target["min_valid_price"]:
             continue
 
@@ -179,15 +166,12 @@ def analyze_market(token, target):
     if len(valid_items) < 3:
         return None
 
-    # Sort lowest to highest total cost
     valid_items.sort(key=lambda x: x["total_buy_cost"])
     all_prices = [x["total_buy_cost"] for x in valid_items]
 
-    # Outlier Removal: Cut the top 40% overpriced sellers
     cutoff = max(1, int(len(all_prices) * 0.60))
     realistic_prices = all_prices[:cutoff]
 
-    # Target Resale: Median of the realistic pool (undercuts ~70% of active sellers)
     recommended_sell = round(statistics.median(realistic_prices), 2)
     outbound_ship = target["est_outbound_ship"]
 
@@ -200,7 +184,6 @@ def analyze_market(token, target):
     net_profit = round(net_payout - buy_cost, 2)
     roi_pct = round((net_profit / buy_cost) * 100, 1) if buy_cost > 0 else 0.0
 
-    # Strict maximum price to pay to guarantee our profit and ROI targets
     max_buy_for_profit = net_payout - MIN_PROFIT_CAD
     max_buy_for_roi = net_payout / (1.0 + (MIN_ROI_PCT / 100.0))
     strict_buy_ceiling = round(min(MAX_BUDGET_CAD, max_buy_for_profit, max_buy_for_roi), 2)
@@ -246,12 +229,10 @@ def run_arbitrage_engine():
             requests.post(DISCORD_WEBHOOK, json={"content": "⚠️ Scan completed: No legitimate complete units found right now."})
             return "No Data"
 
-        # Sort so the highest profit item is at the top
         results.sort(key=lambda x: x["net_profit"], reverse=True)
         top = results[0]
         best = top["best"]
 
-        # Fetch extra seller details for the top listing
         details = fetch_item_details(token, best["id"])
         seller_desc = details.get("conditionDescription", "No condition notes provided by seller.")
         if len(seller_desc) > 160:
@@ -262,7 +243,6 @@ def run_arbitrage_engine():
         seller_name = best["seller"].get("username", "Unknown")
         seller_pct = best["seller"].get("feedbackPercentage", "N/A")
 
-        # Build clean Scoreboard where every item has its own clickable link
         scoreboard_rows = []
         for r in results:
             icon = "🟢" if r["is_snipe"] else ("💸" if not r["within_budget"] else "⚪")
@@ -276,7 +256,7 @@ def run_arbitrage_engine():
 
         if top["is_snipe"]:
             banner = f"🚨 SNIPE OPPORTUNITY: {top['target_name']}"
-            embed_color = 5763719  # Green
+            embed_color = 5763719
             call_to_action = (
                 f"**RECOMMENDATION: BUY NOW**\n"
                 f"This listing clears all your criteria: under your `${MAX_BUDGET_CAD:.0f}` budget, "
@@ -284,7 +264,7 @@ def run_arbitrage_engine():
             )
         else:
             banner = f"📊 MARKET REPORT: Best Current Deal is {top['target_name']}"
-            embed_color = 3447003  # Blue
+            embed_color = 3447003
             diff = top['best']['total_buy_cost'] - top['strict_buy_ceiling']
             call_to_action = (
                 f"**RECOMMENDATION: HOLD / SUBMIT OFFER**\n"
