@@ -58,9 +58,11 @@ def test_ebay_pipeline():
         if items:
             title = items[0].get("title", "Unknown")
             price = items[0].get("price", {}).get("value", "N/A")
-            requests.post(DISCORD_WEBHOOK, json={"content": f"🟩 **TEST SUCCESS:** {title} - ${price} CAD"})
+            discord_resp = requests.post(DISCORD_WEBHOOK, json={"content": f"🟩 **TEST SUCCESS:** {title} - ${price} CAD"})
+            print(f"Discord Response: {discord_resp.status_code} - {discord_resp.text}")
         else:
-            requests.post(DISCORD_WEBHOOK, json={"content": "🟩 TEST SUCCESS: API connected, 0 listings."})
+            discord_resp = requests.post(DISCORD_WEBHOOK, json={"content": "🟩 TEST SUCCESS: API connected, 0 listings."})
+            print(f"Discord Response: {discord_resp.status_code} - {discord_resp.text}")
 
         print("--- TEST COMPLETE ---")
         return "Success"
