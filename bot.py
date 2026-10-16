@@ -15,11 +15,18 @@ APP_ID = os.environ.get("APP_ID", "").strip()
 CERT_ID = os.environ.get("CERT_ID", "").strip()
 DISCORD_WEBHOOK = os.environ.get("DISCORD_WEBHOOK", "").strip()
 
+# =====================================================================
+# 1. YOUR MASTER WALLET & PROFIT RULES
+# =====================================================================
 MAX_BUDGET_CAD = 250.00     
 MIN_PROFIT_CAD = 45.00      
 MIN_ROI_PCT = 20.0          
 
+# =====================================================================
+# 2. REAL-WORLD DEDUCTIONS & TAXES (CAD)
+# =====================================================================
 BUYER_TAX_RATE = 0.15       
+IMPORT_HANDLING_FEE = 10.00 # Flat Canada Post border handling fee
 EBAY_FEE_RATE = 0.136       
 EBAY_FIXED_FEE = 0.30       
 PACKAGING_COST = 4.50       
@@ -149,9 +156,10 @@ def analyze_market(token, target):
             if "value" in ship_cost_obj:
                 inbound_ship = float(ship_cost_obj["value"])
 
+        # NEW MATH: Adding the flat $10 border fee
         subtotal = price_val + inbound_ship
         tax_est = subtotal * BUYER_TAX_RATE
-        total_landed = subtotal + tax_est
+        total_landed = subtotal + tax_est + IMPORT_HANDLING_FEE
 
         if total_landed < target["min_valid_price"]:
             continue
@@ -217,7 +225,7 @@ def analyze_market(token, target):
     }
 
 def run_arbitrage_engine():
-    print("--- RUNNING 5-ITEM SCAN (NORTH AMERICA ONLY + iFLEX SHIELD) ---")
+    print("--- RUNNING HARDENED SCAN (IMPORT FEES ADDED) ---")
     if not DISCORD_WEBHOOK.startswith("http") or not APP_ID or not CERT_ID:
         print("❌ Missing environment variables.")
         return "Config Error"
@@ -255,7 +263,7 @@ def run_arbitrage_engine():
             icon = "🟢" if r["is_snipe"] else ("💸" if not r["within_budget"] else "⚪")
             row = (
                 f"{icon} **[{r['target_name']}]({r['best']['url']})**\n"
-                f"   • Ask (with Tax): `${r['best']['total_buy_cost']:.2f}` → Target Sell: `${r['recommended_sell']:.2f}`\n"
+                f"   • Ask (with Tax/Fees): `${r['best']['total_buy_cost']:.2f}` → Target Sell: `${r['recommended_sell']:.2f}`\n"
                 f"   • Net Profit: **`${r['net_profit']:.2f} CAD`** ({r['roi_pct']}% ROI)"
             )
             scoreboard_rows.append(row)
@@ -275,7 +283,7 @@ def run_arbitrage_engine():
             diff = top['best']['total_buy_cost'] - top['strict_buy_ceiling']
             call_to_action = (
                 f"**RECOMMENDATION: HOLD / SUBMIT OFFER**\n"
-                f"Current ask (with tax) of `${top['best']['total_buy_cost']:.2f}` yields `${top['net_profit']:.2f}` profit. "
+                f"Current ask (with taxes/fees) of `${top['best']['total_buy_cost']:.2f}` yields `${top['net_profit']:.2f}` profit. "
                 f"To hit your `${MIN_PROFIT_CAD:.0f}` profit target, offer **`${top['strict_buy_ceiling']:.2f} CAD`** total."
             )
 
@@ -292,6 +300,7 @@ def run_arbitrage_engine():
                         f"   • Item Price: `${best['item_price']:.2f}`\n"
                         f"   • Inbound Shipping: `${best['inbound_ship']:.2f}`\n"
                         f"   • QC Tax (15%): `+${best['tax_est']:.2f}`\n"
+                        f"   • Border Handling Buffer: `+${IMPORT_HANDLING_FEE:.2f}`\n"
                         f"   • **Total Buy Cost:** **`${best['total_buy_cost']:.2f} CAD`**\n\n"
                         f"**2. Target Resale Value:**\n"
                         f"   • Realistic Selling Price: **`${top['recommended_sell']:.2f} CAD`**\n"
