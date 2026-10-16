@@ -72,7 +72,7 @@ BLACKLIST_WORDS = [
     r"screen", r"display", r"lcd", r"motherboard", r"pcb", r"fuse", r"fuses",
     r"strap", r"clip", r"mount", r"broken", r"defective", r"repair", r"damaged",
     r"as-is", r"untested", r"cracked", r"faulty", r"parts", r"stand", r"stands", 
-    r"holder", r"holders", r"accessory", r"accessories"
+    r"holder", r"holders", r"accessory", r"accessories", r"iflex", r"i2500", r"clamp only"
 ]
 
 BLACKLIST_REGEX = re.compile(r'\b(' + '|'.join(BLACKLIST_WORDS) + r')\b', re.IGNORECASE)
@@ -118,7 +118,7 @@ def analyze_market(token, target):
         },
         params={
             "q": target["query"],
-            "filter": "conditionIds:{3000|2500|2000|1500},buyingOptions:{FIXED_PRICE|BEST_OFFER}",
+            "filter": "conditionIds:{3000|2500|2000|1500},buyingOptions:{FIXED_PRICE|BEST_OFFER},itemLocationCountry:{US|CA}",
             "limit": "100"
         },
         timeout=15
@@ -217,7 +217,7 @@ def analyze_market(token, target):
     }
 
 def run_arbitrage_engine():
-    print("--- RUNNING 5-ITEM SCAN (REGEX SHIELD UPDATED) ---")
+    print("--- RUNNING 5-ITEM SCAN (NORTH AMERICA ONLY + iFLEX SHIELD) ---")
     if not DISCORD_WEBHOOK.startswith("http") or not APP_ID or not CERT_ID:
         print("❌ Missing environment variables.")
         return "Config Error"
