@@ -15,58 +15,49 @@ APP_ID = os.environ.get("APP_ID", "").strip()
 CERT_ID = os.environ.get("CERT_ID", "").strip()
 DISCORD_WEBHOOK = os.environ.get("DISCORD_WEBHOOK", "").strip()
 
-# =====================================================================
-# 1. YOUR MASTER WALLET & PROFIT RULES
-# =====================================================================
-MAX_BUDGET_CAD = 250.00     # Maximum total cash per flip
-MIN_PROFIT_CAD = 45.00      # Minimum net profit in pocket after ALL fees & taxes
-MIN_ROI_PCT = 20.0          # Minimum Return on Investment %
+MAX_BUDGET_CAD = 250.00     
+MIN_PROFIT_CAD = 45.00      
+MIN_ROI_PCT = 20.0          
 
-# =====================================================================
-# 2. REAL-WORLD DEDUCTIONS & TAXES (CAD)
-# =====================================================================
-BUYER_TAX_RATE = 0.15       # 15% Quebec Sales Tax (added to your buy cost)
-EBAY_FEE_RATE = 0.136       # 13.6% eBay Canada standard category fee
-EBAY_FIXED_FEE = 0.30       # $0.30 per order flat fee
-PACKAGING_COST = 4.50       # Box, bubble wrap, packing tape
+BUYER_TAX_RATE = 0.15       
+EBAY_FEE_RATE = 0.136       
+EBAY_FIXED_FEE = 0.30       
+PACKAGING_COST = 4.50       
 
-# =====================================================================
-# 3. THE 5-ITEM WATCHLIST (Tuned Price Floors)
-# =====================================================================
 WATCHLIST = [
     {
         "name": "Fluke 87V Multimeter",
         "query": "Fluke 87V",
         "must_contain": ["fluke", "87"],
-        "min_valid_price": 140.00,  # Working 87Vs do not sell below this
+        "min_valid_price": 140.00,  
         "est_outbound_ship": 18.00
     },
     {
         "name": "Fluke 376 FC Clamp Meter",
         "query": "Fluke 376",
         "must_contain": ["fluke", "376"],
-        "min_valid_price": 210.00,  # Eliminates $80-$160 plastic housings & cases
+        "min_valid_price": 210.00,  
         "est_outbound_ship": 18.00
     },
     {
         "name": "New Nintendo 3DS XL",
         "query": '"New Nintendo 3DS XL"',
         "must_contain": ["3ds", "xl"],
-        "min_valid_price": 150.00,  # Eliminates replacement shells & styluses
+        "min_valid_price": 150.00,  
         "est_outbound_ship": 15.00
     },
     {
         "name": "Garmin inReach Mini 2",
         "query": '"inReach Mini 2"',
         "must_contain": ["inreach", "mini"],
-        "min_valid_price": 160.00,  # Eliminates mounts & dummy display units
+        "min_valid_price": 160.00,  
         "est_outbound_ship": 15.00
     },
     {
         "name": "TI-84 Plus CE Calculator",
         "query": '"TI-84 Plus CE"',
         "must_contain": ["ti-84", "ce"],
-        "min_valid_price": 45.00,   # Eliminates slide covers & charging cables
+        "min_valid_price": 45.00,   
         "est_outbound_ship": 14.00
     }
 ]
@@ -80,7 +71,8 @@ BLACKLIST_WORDS = [
     r"bag", r"holster", r"pouch", r"box", r"boxes", r"empty", r"manual", r"manuals",
     r"screen", r"display", r"lcd", r"motherboard", r"pcb", r"fuse", r"fuses",
     r"strap", r"clip", r"mount", r"broken", r"defective", r"repair", r"damaged",
-    r"as-is", r"untested", r"cracked", r"faulty", r"parts"
+    r"as-is", r"untested", r"cracked", r"faulty", r"parts", r"stand", r"stands", 
+    r"holder", r"holders", r"accessory", r"accessories"
 ]
 
 BLACKLIST_REGEX = re.compile(r'\b(' + '|'.join(BLACKLIST_WORDS) + r')\b', re.IGNORECASE)
@@ -142,11 +134,9 @@ def analyze_market(token, target):
         title = item.get("title", "")
         title_lower = title.lower()
 
-        # Must contain brand/model identifiers
         if not all(word in title_lower for word in target["must_contain"]):
             continue
 
-        # Regex Word-Boundary Shield: Drops any standalone part/case words
         if BLACKLIST_REGEX.search(title):
             continue
 
@@ -159,12 +149,10 @@ def analyze_market(token, target):
             if "value" in ship_cost_obj:
                 inbound_ship = float(ship_cost_obj["value"])
 
-        # Landed cost including 15% Quebec tax buffer
         subtotal = price_val + inbound_ship
         tax_est = subtotal * BUYER_TAX_RATE
         total_landed = subtotal + tax_est
 
-        # Drop anything below the minimum working price floor
         if total_landed < target["min_valid_price"]:
             continue
 
@@ -188,7 +176,6 @@ def analyze_market(token, target):
     valid_items.sort(key=lambda x: x["total_buy_cost"])
     all_prices = [x["total_buy_cost"] for x in valid_items]
 
-    # Outlier Removal: Cut top 40% overpriced listings
     cutoff = max(1, int(len(all_prices) * 0.60))
     realistic_prices = all_prices[:cutoff]
 
@@ -230,7 +217,7 @@ def analyze_market(token, target):
     }
 
 def run_arbitrage_engine():
-    print("--- RUNNING 5-ITEM SCAN (REGEX SHIELD + RAISED FLOORS) ---")
+    print("--- RUNNING 5-ITEM SCAN (REGEX SHIELD UPDATED) ---")
     if not DISCORD_WEBHOOK.startswith("http") or not APP_ID or not CERT_ID:
         print("❌ Missing environment variables.")
         return "Config Error"
