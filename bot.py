@@ -15,66 +15,70 @@ CERT_ID = os.environ.get("CERT_ID", "").strip()
 DISCORD_WEBHOOK = os.environ.get("DISCORD_WEBHOOK", "").strip()
 
 # =====================================================================
-# 1. YOUR MASTER WALLET & PROFIT RULES (EDIT THESE ANYTIME)
+# 1. YOUR MASTER WALLET & PROFIT RULES
 # =====================================================================
-MAX_BUDGET_CAD = 250.00     # Max total cash (item + shipping) you want to spend per flip
-MIN_PROFIT_CAD = 50.00      # Minimum pure profit in CAD after ALL fees, box, and shipping
-MIN_ROI_PCT = 25.0          # Minimum Return on Investment % (Profit / Total Buy Cost)
+MAX_BUDGET_CAD = 250.00     # Maximum total cash (Item + Inbound Shipping) per flip
+MIN_PROFIT_CAD = 45.00      # Minimum net profit in pocket after ALL fees & shipping
+MIN_ROI_PCT = 20.0          # Minimum Return on Investment %
 
 # =====================================================================
-# 2. REAL-WORLD SELLING EXPENSES (CAD)
+# 2. REAL-WORLD DEDUCTIONS (CAD)
 # =====================================================================
-EBAY_FEE_RATE = 0.136       # 13.6% eBay Canada final value fee
-EBAY_FIXED_FEE = 0.30       # $0.30 per order fee
-PACKAGING_COST = 4.50       # Box, bubble wrap, tape
+EBAY_FEE_RATE = 0.136       # 13.6% eBay Canada standard category fee
+EBAY_FIXED_FEE = 0.30       # $0.30 per order flat fee
+PACKAGING_COST = 4.50       # Box, bubble wrap, packing tape
 
 # =====================================================================
-# 3. THE 5-ITEM WATCHLIST
+# 3. THE 5-ITEM WATCHLIST (Strictly Tuned for Full Working Units)
 # =====================================================================
 WATCHLIST = [
     {
         "name": "Fluke 87V Multimeter",
-        "query": "Fluke 87V -parts -broken -repair -case -leads -holster -manual -box -fuse",
+        "query": "Fluke 87V",
         "must_contain": ["fluke", "87"],
-        "min_valid_price": 95.00,   # Ignores $25 leads/cases mislisted as meters
+        "min_valid_price": 120.00,  # Legitimate working units start well above $120
         "est_outbound_ship": 18.00
-    },
-    {
-        "name": "New Nintendo 3DS XL Console",
-        "query": '"New Nintendo 3DS XL" -parts -broken -repair -box -case -shell -screen -motherboard -brick',
-        "must_contain": ["3ds", "xl"],
-        "min_valid_price": 110.00,  # Ignores replacement shells/chargers/boxes
-        "est_outbound_ship": 15.00
     },
     {
         "name": "Fluke 376 FC Clamp Meter",
-        "query": "Fluke 376 -parts -broken -repair -case -leads -bag -manual -box -strap",
+        "query": "Fluke 376",
         "must_contain": ["fluke", "376"],
-        "min_valid_price": 95.00,
+        "min_valid_price": 140.00,  # Kills $80 plastic shells & replacement springs
         "est_outbound_ship": 18.00
     },
     {
+        "name": "New Nintendo 3DS XL",
+        "query": '"New Nintendo 3DS XL"',
+        "must_contain": ["3ds", "xl"],
+        "min_valid_price": 140.00,  # Kills replacement screens, styluses, and shells
+        "est_outbound_ship": 15.00
+    },
+    {
         "name": "Garmin inReach Mini 2",
-        "query": '"inReach Mini 2" -parts -broken -mount -case -cable -clip -screen -box',
+        "query": '"inReach Mini 2"',
         "must_contain": ["inreach", "mini"],
-        "min_valid_price": 120.00,
+        "min_valid_price": 150.00,  # Kills backpack mounts, clips, and dummy units
         "est_outbound_ship": 15.00
     },
     {
         "name": "TI-84 Plus CE Calculator",
-        "query": '"TI-84 Plus CE" -parts -broken -cover -cable -manual -slide -battery',
+        "query": '"TI-84 Plus CE"',
         "must_contain": ["ti-84", "ce"],
-        "min_valid_price": 35.00,
+        "min_valid_price": 45.00,   # Kills replacement slide covers and charging cables
         "est_outbound_ship": 14.00
     }
 ]
 
-# Universal words that always mean broken/junk/accessories
-GLOBAL_JUNK_WORDS = [
+# HARDWARE SHIELD: Words that immediately identify parts, accessories, or broken junk
+HARDWARE_BLACKLIST = [
+    "shell", "spring", "springs", "housing", "door", "cover", "faceplate",
+    "bracket", "knob", "dial", "switch", "screw", "screws", "battery cover",
+    "battery door", "replacement", "adapter", "adaptor", "cable only", "lead only",
+    "leads only", "probe only", "probes only", "case only", "bag only", "holster only",
+    "box only", "empty box", "manual only", "screen only", "display only", "lcd only",
+    "motherboard", "main board", "pcb", "fuse", "fuses", "strap", "clip", "mount",
     "for parts", "not working", "parts only", "broken", "defective", "repair",
-    "case only", "bag only", "leads only", "probe only", "manual only", "empty box",
-    "box only", "holster only", "screen only", "display only", "shell only",
-    "damaged", "as is", "as-is", "untested", "no display", "cracked", "faulty"
+    "damaged", "as is", "as-is", "untested", "read description", "cracked", "faulty"
 ]
 
 def get_oauth_token():
@@ -108,8 +112,8 @@ def fetch_item_details(token, item_id):
     )
     return resp.json() if resp.status_code == 200 else {}
 
-def analyze_single_market(token, target):
-    """Scans 1 item market, removes top 40% overpriced sellers, and checks the cheapest unit."""
+def analyze_market(token, target):
+    """Scans 1 market, removes parts/shells, filters outliers, and evaluates profitability."""
     search_resp = requests.get(
         "https://api.ebay.com/buy/browse/v1/item_summary/search",
         headers={
@@ -135,23 +139,27 @@ def analyze_single_market(token, target):
         title = item.get("title", "")
         title_lower = title.lower()
 
+        # Must contain brand/model identifiers
         if not all(word in title_lower for word in target["must_contain"]):
             continue
-        if any(junk in title_lower for junk in GLOBAL_JUNK_WORDS):
+
+        # Hardware Shield: Drop any listing mentioning parts, shells, springs, etc.
+        if any(bad_word in title_lower for bad_word in HARDWARE_BLACKLIST):
             continue
 
         price_val = float(item.get("price", {}).get("value", 0))
-        
+
+        # Calculate exact landed shipping
         ship_opts = item.get("shippingOptions", [])
         inbound_ship = 20.00
-        ship_note = "$20.00 (Est.)"
         if ship_opts:
             ship_cost_obj = ship_opts[0].get("shippingCost", {})
             if "value" in ship_cost_obj:
                 inbound_ship = float(ship_cost_obj["value"])
-                ship_note = "FREE" if inbound_ship == 0 else f"${inbound_ship:.2f}"
 
         total_landed = price_val + inbound_ship
+
+        # Drop anything below the realistic price floor for a complete, working unit
         if total_landed < target["min_valid_price"]:
             continue
 
@@ -160,41 +168,42 @@ def analyze_single_market(token, target):
             "title": title,
             "item_price": price_val,
             "inbound_ship": inbound_ship,
-            "ship_note": ship_note,
             "total_buy_cost": round(total_landed, 2),
             "url": item.get("itemWebUrl", "https://www.ebay.ca"),
             "image": item.get("image", {}).get("imageUrl", ""),
             "condition": item.get("condition", "Used"),
             "buying_options": item.get("buyingOptions", []),
-            "seller": item.get("seller", {}),
-            "location": item.get("itemLocation", {})
+            "seller": item.get("seller", {})
         })
 
     if len(valid_items) < 3:
         return None
 
-    # Sort cheapest to most expensive and remove top 40% overpriced sellers
+    # Sort lowest to highest total cost
     valid_items.sort(key=lambda x: x["total_buy_cost"])
     all_prices = [x["total_buy_cost"] for x in valid_items]
+
+    # Outlier Removal: Cut the top 40% overpriced sellers
     cutoff = max(1, int(len(all_prices) * 0.60))
     realistic_prices = all_prices[:cutoff]
 
+    # Target Resale: Median of the realistic pool (undercuts ~70% of active sellers)
     recommended_sell = round(statistics.median(realistic_prices), 2)
     outbound_ship = target["est_outbound_ship"]
 
     ebay_fee = round((recommended_sell * EBAY_FEE_RATE) + EBAY_FIXED_FEE, 2)
-    total_sell_expenses = round(ebay_fee + PACKAGING_COST + outbound_ship, 2)
-    net_payout = round(recommended_sell - total_sell_expenses, 2)
+    total_deductions = round(ebay_fee + PACKAGING_COST + outbound_ship, 2)
+    net_payout = round(recommended_sell - total_deductions, 2)
 
     best = valid_items[0]
     buy_cost = best["total_buy_cost"]
     net_profit = round(net_payout - buy_cost, 2)
     roi_pct = round((net_profit / buy_cost) * 100, 1) if buy_cost > 0 else 0.0
 
-    # Calculate exact max buy price that meets BOTH Min Profit ($50) and Min ROI (25%)
-    max_buy_by_profit = net_payout - MIN_PROFIT_CAD
-    max_buy_by_roi = net_payout / (1.0 + (MIN_ROI_PCT / 100.0))
-    strict_buy_ceiling = round(min(MAX_BUDGET_CAD, max_buy_by_profit, max_buy_by_roi), 2)
+    # Strict maximum price to pay to guarantee our profit and ROI targets
+    max_buy_for_profit = net_payout - MIN_PROFIT_CAD
+    max_buy_for_roi = net_payout / (1.0 + (MIN_ROI_PCT / 100.0))
+    strict_buy_ceiling = round(min(MAX_BUDGET_CAD, max_buy_for_profit, max_buy_for_roi), 2)
 
     within_budget = buy_cost <= MAX_BUDGET_CAD
     meets_profit = net_profit >= MIN_PROFIT_CAD
@@ -204,11 +213,11 @@ def analyze_single_market(token, target):
     return {
         "target_name": target["name"],
         "outbound_ship": outbound_ship,
-        "supply_count": len(all_prices),
-        "highest_price": round(max(all_prices), 2),
+        "sample_size": len(all_prices),
         "recommended_sell": recommended_sell,
         "ebay_fee": ebay_fee,
         "net_payout": net_payout,
+        "total_deductions": total_deductions,
         "best": best,
         "net_profit": net_profit,
         "roi_pct": roi_pct,
@@ -218,7 +227,7 @@ def analyze_single_market(token, target):
     }
 
 def run_arbitrage_engine():
-    print("--- RUNNING 5-ITEM SMART ARBITRAGE SCAN ---")
+    print("--- RUNNING HARDENED 5-ITEM ARBITRAGE SCAN ---")
     if not DISCORD_WEBHOOK.startswith("http") or not APP_ID or not CERT_ID:
         print("❌ Missing environment variables.")
         return "Config Error"
@@ -228,91 +237,102 @@ def run_arbitrage_engine():
         results = []
 
         for target in WATCHLIST:
-            print(f"Scanning: {target['name']}...")
-            res = analyze_single_market(token, target)
+            print(f"Scanning market: {target['name']}...")
+            res = analyze_market(token, target)
             if res:
                 results.append(res)
 
         if not results:
-            requests.post(DISCORD_WEBHOOK, json={"content": "⚠️ Scanned watchlist: No valid listings returned."})
+            requests.post(DISCORD_WEBHOOK, json={"content": "⚠️ Scan completed: No legitimate complete units found right now."})
             return "No Data"
 
-        # Sort results so the highest net profit item is #1
+        # Sort so the highest profit item is at the top
         results.sort(key=lambda x: x["net_profit"], reverse=True)
         top = results[0]
         best = top["best"]
 
-        # Pull deep characteristics for the #1 best listing across all 5 items
+        # Fetch extra seller details for the top listing
         details = fetch_item_details(token, best["id"])
-        cond_desc = details.get("conditionDescription", "No extra condition notes provided by seller.")
-        if len(cond_desc) > 200:
-            cond_desc = cond_desc[:197] + "..."
-
-        aspects = details.get("localizedAspects", [])
-        spec_list = [f"**{a.get('name')}:** {a.get('value')}" for a in aspects[:6] if a.get("name") and a.get("value")]
-        specs_text = " | ".join(spec_list) if spec_list else top["target_name"]
+        seller_desc = details.get("conditionDescription", "No condition notes provided by seller.")
+        if len(seller_desc) > 160:
+            seller_desc = seller_desc[:157] + "..."
 
         accepts_offers = "BEST_OFFER" in best["buying_options"]
-        offer_str = "✅ YES (Can Offer Lower)" if accepts_offers else "❌ No (Fixed Price)"
+        offer_str = "Yes (Submit Lower Offer)" if accepts_offers else "Fixed Price Only"
         seller_name = best["seller"].get("username", "Unknown")
         seller_pct = best["seller"].get("feedbackPercentage", "N/A")
 
-        # Build summary of all 5 items scanned
-        scoreboard_lines = []
+        # Build clean Scoreboard where every item has its own clickable link
+        scoreboard_rows = []
         for r in results:
-            status_icon = "🟢" if r["is_snipe"] else ("💸" if not r["within_budget"] else "🔴")
-            scoreboard_lines.append(
-                f"{status_icon} **{r['target_name']}**: Ask `${r['best']['total_buy_cost']:.2f}` "
-                f"→ Sell `${r['recommended_sell']:.2f}` | Profit: **`${r['net_profit']:.2f}`** (`{r['roi_pct']}% ROI`)"
+            icon = "🟢" if r["is_snipe"] else ("💸" if not r["within_budget"] else "⚪")
+            row = (
+                f"{icon} **[{r['target_name']}]({r['best']['url']})**\n"
+                f"   • Ask: `${r['best']['total_buy_cost']:.2f}` → Target Sell: `${r['recommended_sell']:.2f}`\n"
+                f"   • Net Profit: **`${r['net_profit']:.2f} CAD`** ({r['roi_pct']}% ROI)"
             )
-        scoreboard_text = "\n".join(scoreboard_lines)
+            scoreboard_rows.append(row)
+        scoreboard_text = "\n\n".join(scoreboard_rows)
 
         if top["is_snipe"]:
-            title_banner = f"🟢 SNIPE FOUND (+${top['net_profit']:.2f} CAD | {top['roi_pct']}% ROI): {top['target_name']}"
-            color = 5763719  # Green
-            verdict_text = (
-                f"**PASSES ALL RULES!** Under your `${MAX_BUDGET_CAD:.0f}` budget, beats `${MIN_PROFIT_CAD:.0f}` min profit, "
-                f"and beats `{MIN_ROI_PCT:.0f}%` ROI."
+            banner = f"🚨 SNIPE OPPORTUNITY: {top['target_name']}"
+            embed_color = 5763719  # Green
+            call_to_action = (
+                f"**RECOMMENDATION: BUY NOW**\n"
+                f"This listing clears all your criteria: under your `${MAX_BUDGET_CAD:.0f}` budget, "
+                f"exceeds `${MIN_PROFIT_CAD:.0f}` minimum profit, and delivers `{MIN_ROI_PCT:.0f}%+` ROI."
             )
         else:
-            title_banner = f"🔎 5-ITEM SCAN REPORT (Best Current: {top['target_name']} at ${top['net_profit']:.2f} Profit)"
-            color = 15548997 if top["net_profit"] <= 0 else 16776960
-            verdict_text = (
-                f"**NO AUTO-BUY YET.** To hit your `${MIN_PROFIT_CAD:.0f}` profit + `{MIN_ROI_PCT:.0f}%` ROI rules within your "
-                f"`${MAX_BUDGET_CAD:.0f}` budget, total buy price for **{top['target_name']}** must be **`${top['strict_buy_ceiling']:.2f} CAD` or less**."
+            banner = f"📊 MARKET REPORT: Best Current Deal is {top['target_name']}"
+            embed_color = 3447003  # Blue
+            diff = top['best']['total_buy_cost'] - top['strict_buy_ceiling']
+            call_to_action = (
+                f"**RECOMMENDATION: HOLD / SUBMIT OFFER**\n"
+                f"Current ask of `${top['best']['total_buy_cost']:.2f}` yields `${top['net_profit']:.2f}` profit. "
+                f"To hit your `${MIN_PROFIT_CAD:.0f}` profit target, offer **`${top['strict_buy_ceiling']:.2f} CAD`** (needs a `${diff:.2f}` discount)."
             )
 
         embed = {
-            "title": title_banner,
+            "title": banner,
             "url": best["url"],
-            "description": f"🔗 **[CLICK HERE TO OPEN #1 LISTING ON EBAY]({best['url']})**\n\n{verdict_text}",
-            "color": color,
+            "description": f"🔗 **[OPEN LISTING ON EBAY]({best['url']})**\n\n{call_to_action}",
+            "color": embed_color,
             "fields": [
                 {
-                    "name": "📋 All 5 Watchlist Markets (Live Scoreboard)",
+                    "name": "💰 Complete Financial Breakdown (CAD)",
+                    "value": (
+                        f"**1. Purchase Cost (Total Cash Out):**\n"
+                        f"   • Item Price: `${best['item_price']:.2f}`\n"
+                        f"   • Inbound Shipping: `${best['inbound_ship']:.2f}`\n"
+                        f"   • **Total Buy Cost:** **`${best['total_buy_cost']:.2f} CAD`**\n\n"
+                        f"**2. Target Resale Value:**\n"
+                        f"   • Realistic Selling Price: **`${top['recommended_sell']:.2f} CAD`**\n"
+                        f"   • *(Set at the 30th percentile of {top['sample_size']} working units to ensure a fast flip)*\n\n"
+                        f"**3. Deductions & Selling Costs:**\n"
+                        f"   • eBay Final Value Fee (13.6% + $0.30): -`${top['ebay_fee']:.2f}`\n"
+                        f"   • Packaging Box & Wrap: -`${PACKAGING_COST:.2f}`\n"
+                        f"   • Outbound Tracked Shipping: -`${top['outbound_ship']:.2f}`\n"
+                        f"   • **Total Expenses:** -`${top['total_deductions']:.2f} CAD`\n\n"
+                        f"**4. Bottom Line:**\n"
+                        f"   • **NET PROFIT IN POCKET:** **`${top['net_profit']:.2f} CAD`**\n"
+                        f"   • **RETURN ON INVESTMENT:** **`{top['roi_pct']}% ROI`**"
+                    ),
+                    "inline": False
+                },
+                {
+                    "name": "🔍 Item & Seller Details",
+                    "value": (
+                        f"• **Title:** {best['title'][:100]}\n"
+                        f"• **Condition:** {best['condition']}\n"
+                        f"• **Seller:** `{seller_name}` ({seller_pct}% positive feedback)\n"
+                        f"• **Best Offer Enabled:** {offer_str}\n"
+                        f"• **Seller Notes:** *{seller_desc}*"
+                    ),
+                    "inline": False
+                },
+                {
+                    "name": "📋 Live Scoreboard (All 5 Items Monitored)",
                     "value": scoreboard_text,
-                    "inline": False
-                },
-                {
-                    "name": f"💰 #1 Listing Accounting ({top['target_name']})",
-                    "value": (
-                        f"• **Listing Title:** {best['title'][:120]}\n"
-                        f"• **Buy Cost:** `${best['item_price']:.2f}` + {best['ship_note']} ship = **`${best['total_buy_cost']:.2f} CAD`** *(Budget Max: ${MAX_BUDGET_CAD:.0f})*\n"
-                        f"• **Fast-Sell Price (30th Percentile of {top['supply_count']} units):** **`${top['recommended_sell']:.2f} CAD`**\n"
-                        f"• **Deductions:** -`${top['ebay_fee']:.2f}` eBay Fee - `${PACKAGING_COST:.2f}` Box - `${top['outbound_ship']:.2f}` Outbound Ship\n"
-                        f"• **NET PROFIT:** **`${top['net_profit']:.2f} CAD ({top['roi_pct']}% ROI)`**\n"
-                        f"• **Max Buy Price to Hit Your Rules:** **`${top['strict_buy_ceiling']:.2f} CAD`**"
-                    ),
-                    "inline": False
-                },
-                {
-                    "name": "🔍 Seller & Item Characteristics (#1 Listing)",
-                    "value": (
-                        f"• **Condition:** {best['condition']} | **Best Offer:** {offer_str}\n"
-                        f"• **Seller:** `{seller_name}` ({seller_pct}% positive)\n"
-                        f"• **Seller Notes:** *{cond_desc}*\n"
-                        f"• **Specs:** {specs_text[:300]}"
-                    ),
                     "inline": False
                 }
             ]
@@ -322,7 +342,7 @@ def run_arbitrage_engine():
             embed["thumbnail"] = {"url": best["image"]}
 
         requests.post(DISCORD_WEBHOOK, json={"embeds": [embed]}, timeout=15)
-        print("--- 5-ITEM SCAN COMPLETE ---")
+        print("--- SCAN COMPLETE ---")
         return "Success"
 
     except Exception:
