@@ -1,5 +1,6 @@
 import os
 import sys
+import re
 import base64
 import urllib.parse
 import traceback
@@ -30,58 +31,59 @@ EBAY_FIXED_FEE = 0.30       # $0.30 per order flat fee
 PACKAGING_COST = 4.50       # Box, bubble wrap, packing tape
 
 # =====================================================================
-# 3. THE 5-ITEM WATCHLIST (High Daily Demand)
+# 3. THE 5-ITEM WATCHLIST (Tuned Price Floors)
 # =====================================================================
 WATCHLIST = [
     {
         "name": "Fluke 87V Multimeter",
         "query": "Fluke 87V",
         "must_contain": ["fluke", "87"],
-        "min_valid_price": 120.00,
+        "min_valid_price": 140.00,  # Working 87Vs do not sell below this
         "est_outbound_ship": 18.00
     },
     {
         "name": "Fluke 376 FC Clamp Meter",
         "query": "Fluke 376",
         "must_contain": ["fluke", "376"],
-        "min_valid_price": 140.00,
+        "min_valid_price": 210.00,  # Eliminates $80-$160 plastic housings & cases
         "est_outbound_ship": 18.00
     },
     {
         "name": "New Nintendo 3DS XL",
         "query": '"New Nintendo 3DS XL"',
         "must_contain": ["3ds", "xl"],
-        "min_valid_price": 140.00,
+        "min_valid_price": 150.00,  # Eliminates replacement shells & styluses
         "est_outbound_ship": 15.00
     },
     {
         "name": "Garmin inReach Mini 2",
         "query": '"inReach Mini 2"',
         "must_contain": ["inreach", "mini"],
-        "min_valid_price": 150.00,
+        "min_valid_price": 160.00,  # Eliminates mounts & dummy display units
         "est_outbound_ship": 15.00
     },
     {
         "name": "TI-84 Plus CE Calculator",
         "query": '"TI-84 Plus CE"',
         "must_contain": ["ti-84", "ce"],
-        "min_valid_price": 45.00,
+        "min_valid_price": 45.00,   # Eliminates slide covers & charging cables
         "est_outbound_ship": 14.00
     }
 ]
 
-# HARDWARE SHIELD: Words that immediately identify parts, accessories, or broken junk
-HARDWARE_BLACKLIST = [
-    "shell", "spring", "springs", "housing", "door", "cover", "faceplate",
-    "bracket", "knob", "dial", "switch", "screw", "screws", "battery cover",
-    "battery door", "replacement", "adapter", "adaptor", "cable only", "lead only",
-    "leads only", "probe only", "probes only", "case only", "bag only", "holster only",
-    "box only", "empty box", "manual only", "screen only", "display only", "lcd only",
-    "motherboard", "main board", "pcb", "fuse", "fuses", "strap", "clip", "mount",
-    "for parts", "not working", "parts only", "broken", "defective", "repair",
-    "damaged", "as is", "as-is", "untested", "read description", "cracked", "faulty",
-    "enclosure", "enclosures", "empty"
+# HARDWARE SHIELD: Standalone words that immediately flag parts/accessories
+BLACKLIST_WORDS = [
+    r"case", r"cases", r"shell", r"shells", r"housing", r"enclosure", r"enclosures",
+    r"cover", r"covers", r"door", r"doors", r"spring", r"springs", r"faceplate",
+    r"bracket", r"knob", r"dial", r"switch", r"screw", r"screws", r"bezel",
+    r"replacement", r"adapter", r"adaptor", r"lead", r"leads", r"probe", r"probes",
+    r"bag", r"holster", r"pouch", r"box", r"boxes", r"empty", r"manual", r"manuals",
+    r"screen", r"display", r"lcd", r"motherboard", r"pcb", r"fuse", r"fuses",
+    r"strap", r"clip", r"mount", r"broken", r"defective", r"repair", r"damaged",
+    r"as-is", r"untested", r"cracked", r"faulty", r"parts"
 ]
+
+BLACKLIST_REGEX = re.compile(r'\b(' + '|'.join(BLACKLIST_WORDS) + r')\b', re.IGNORECASE)
 
 def get_oauth_token():
     auth = base64.b64encode(f"{APP_ID}:{CERT_ID}".encode()).decode()
@@ -140,10 +142,12 @@ def analyze_market(token, target):
         title = item.get("title", "")
         title_lower = title.lower()
 
+        # Must contain brand/model identifiers
         if not all(word in title_lower for word in target["must_contain"]):
             continue
 
-        if any(bad_word in title_lower for bad_word in HARDWARE_BLACKLIST):
+        # Regex Word-Boundary Shield: Drops any standalone part/case words
+        if BLACKLIST_REGEX.search(title):
             continue
 
         price_val = float(item.get("price", {}).get("value", 0))
@@ -155,11 +159,12 @@ def analyze_market(token, target):
             if "value" in ship_cost_obj:
                 inbound_ship = float(ship_cost_obj["value"])
 
-        # TAX BUFFER CALCULATION
+        # Landed cost including 15% Quebec tax buffer
         subtotal = price_val + inbound_ship
         tax_est = subtotal * BUYER_TAX_RATE
         total_landed = subtotal + tax_est
 
+        # Drop anything below the minimum working price floor
         if total_landed < target["min_valid_price"]:
             continue
 
@@ -183,7 +188,7 @@ def analyze_market(token, target):
     valid_items.sort(key=lambda x: x["total_buy_cost"])
     all_prices = [x["total_buy_cost"] for x in valid_items]
 
-    # Outlier Removal
+    # Outlier Removal: Cut top 40% overpriced listings
     cutoff = max(1, int(len(all_prices) * 0.60))
     realistic_prices = all_prices[:cutoff]
 
@@ -225,7 +230,7 @@ def analyze_market(token, target):
     }
 
 def run_arbitrage_engine():
-    print("--- RUNNING 5-ITEM ARBITRAGE SCAN WITH TAX BUFFER ---")
+    print("--- RUNNING 5-ITEM SCAN (REGEX SHIELD + RAISED FLOORS) ---")
     if not DISCORD_WEBHOOK.startswith("http") or not APP_ID or not CERT_ID:
         print("❌ Missing environment variables.")
         return "Config Error"
