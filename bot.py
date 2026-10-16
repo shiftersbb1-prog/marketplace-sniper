@@ -14,14 +14,24 @@ APP_ID = os.environ.get("APP_ID", "").strip()
 CERT_ID = os.environ.get("CERT_ID", "").strip()
 DISCORD_WEBHOOK = os.environ.get("DISCORD_WEBHOOK", "").strip()
 
-MAX_BUDGET_CAD = 250.00
-MIN_PROFIT_CAD = 45.00
-MIN_ROI_PCT = 20.0
+# =====================================================================
+# 1. YOUR MASTER WALLET & PROFIT RULES
+# =====================================================================
+MAX_BUDGET_CAD = 250.00     # Maximum total cash per flip
+MIN_PROFIT_CAD = 45.00      # Minimum net profit in pocket after ALL fees & taxes
+MIN_ROI_PCT = 20.0          # Minimum Return on Investment %
 
-EBAY_FEE_RATE = 0.136
-EBAY_FIXED_FEE = 0.30
-PACKAGING_COST = 4.50
+# =====================================================================
+# 2. REAL-WORLD DEDUCTIONS & TAXES (CAD)
+# =====================================================================
+BUYER_TAX_RATE = 0.15       # 15% Quebec Sales Tax (added to your buy cost)
+EBAY_FEE_RATE = 0.136       # 13.6% eBay Canada standard category fee
+EBAY_FIXED_FEE = 0.30       # $0.30 per order flat fee
+PACKAGING_COST = 4.50       # Box, bubble wrap, packing tape
 
+# =====================================================================
+# 3. THE 5-ITEM WATCHLIST (High Daily Demand)
+# =====================================================================
 WATCHLIST = [
     {
         "name": "Fluke 87V Multimeter",
@@ -60,7 +70,7 @@ WATCHLIST = [
     }
 ]
 
-# --- THE PATCHED SHIELD ---
+# HARDWARE SHIELD: Words that immediately identify parts, accessories, or broken junk
 HARDWARE_BLACKLIST = [
     "shell", "spring", "springs", "housing", "door", "cover", "faceplate",
     "bracket", "knob", "dial", "switch", "screw", "screws", "battery cover",
@@ -145,7 +155,10 @@ def analyze_market(token, target):
             if "value" in ship_cost_obj:
                 inbound_ship = float(ship_cost_obj["value"])
 
-        total_landed = price_val + inbound_ship
+        # TAX BUFFER CALCULATION
+        subtotal = price_val + inbound_ship
+        tax_est = subtotal * BUYER_TAX_RATE
+        total_landed = subtotal + tax_est
 
         if total_landed < target["min_valid_price"]:
             continue
@@ -155,6 +168,7 @@ def analyze_market(token, target):
             "title": title,
             "item_price": price_val,
             "inbound_ship": inbound_ship,
+            "tax_est": tax_est,
             "total_buy_cost": round(total_landed, 2),
             "url": item.get("itemWebUrl", "https://www.ebay.ca"),
             "image": item.get("image", {}).get("imageUrl", ""),
@@ -169,6 +183,7 @@ def analyze_market(token, target):
     valid_items.sort(key=lambda x: x["total_buy_cost"])
     all_prices = [x["total_buy_cost"] for x in valid_items]
 
+    # Outlier Removal
     cutoff = max(1, int(len(all_prices) * 0.60))
     realistic_prices = all_prices[:cutoff]
 
@@ -210,7 +225,7 @@ def analyze_market(token, target):
     }
 
 def run_arbitrage_engine():
-    print("--- RUNNING HARDENED 5-ITEM ARBITRAGE SCAN ---")
+    print("--- RUNNING 5-ITEM ARBITRAGE SCAN WITH TAX BUFFER ---")
     if not DISCORD_WEBHOOK.startswith("http") or not APP_ID or not CERT_ID:
         print("❌ Missing environment variables.")
         return "Config Error"
@@ -248,7 +263,7 @@ def run_arbitrage_engine():
             icon = "🟢" if r["is_snipe"] else ("💸" if not r["within_budget"] else "⚪")
             row = (
                 f"{icon} **[{r['target_name']}]({r['best']['url']})**\n"
-                f"   • Ask: `${r['best']['total_buy_cost']:.2f}` → Target Sell: `${r['recommended_sell']:.2f}`\n"
+                f"   • Ask (with Tax): `${r['best']['total_buy_cost']:.2f}` → Target Sell: `${r['recommended_sell']:.2f}`\n"
                 f"   • Net Profit: **`${r['net_profit']:.2f} CAD`** ({r['roi_pct']}% ROI)"
             )
             scoreboard_rows.append(row)
@@ -268,8 +283,8 @@ def run_arbitrage_engine():
             diff = top['best']['total_buy_cost'] - top['strict_buy_ceiling']
             call_to_action = (
                 f"**RECOMMENDATION: HOLD / SUBMIT OFFER**\n"
-                f"Current ask of `${top['best']['total_buy_cost']:.2f}` yields `${top['net_profit']:.2f}` profit. "
-                f"To hit your `${MIN_PROFIT_CAD:.0f}` profit target, offer **`${top['strict_buy_ceiling']:.2f} CAD`** (needs a `${diff:.2f}` discount)."
+                f"Current ask (with tax) of `${top['best']['total_buy_cost']:.2f}` yields `${top['net_profit']:.2f}` profit. "
+                f"To hit your `${MIN_PROFIT_CAD:.0f}` profit target, offer **`${top['strict_buy_ceiling']:.2f} CAD`** total."
             )
 
         embed = {
@@ -284,6 +299,7 @@ def run_arbitrage_engine():
                         f"**1. Purchase Cost (Total Cash Out):**\n"
                         f"   • Item Price: `${best['item_price']:.2f}`\n"
                         f"   • Inbound Shipping: `${best['inbound_ship']:.2f}`\n"
+                        f"   • QC Tax (15%): `+${best['tax_est']:.2f}`\n"
                         f"   • **Total Buy Cost:** **`${best['total_buy_cost']:.2f} CAD`**\n\n"
                         f"**2. Target Resale Value:**\n"
                         f"   • Realistic Selling Price: **`${top['recommended_sell']:.2f} CAD`**\n"
