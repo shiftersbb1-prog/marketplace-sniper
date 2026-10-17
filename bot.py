@@ -15,18 +15,12 @@ APP_ID = os.environ.get("APP_ID", "").strip()
 CERT_ID = os.environ.get("CERT_ID", "").strip()
 DISCORD_WEBHOOK = os.environ.get("DISCORD_WEBHOOK", "").strip()
 
-# =====================================================================
-# 1. YOUR MASTER WALLET & PROFIT RULES
-# =====================================================================
 MAX_BUDGET_CAD = 250.00     
 MIN_PROFIT_CAD = 45.00      
 MIN_ROI_PCT = 20.0          
 
-# =====================================================================
-# 2. REAL-WORLD DEDUCTIONS & TAXES (CAD)
-# =====================================================================
 BUYER_TAX_RATE = 0.15       
-IMPORT_HANDLING_FEE = 10.00 # Flat Canada Post border handling fee
+IMPORT_HANDLING_FEE = 10.00 
 EBAY_FEE_RATE = 0.136       
 EBAY_FIXED_FEE = 0.30       
 PACKAGING_COST = 4.50       
@@ -69,7 +63,6 @@ WATCHLIST = [
     }
 ]
 
-# HARDWARE SHIELD: Standalone words that immediately flag parts/accessories
 BLACKLIST_WORDS = [
     r"case", r"cases", r"shell", r"shells", r"housing", r"enclosure", r"enclosures",
     r"cover", r"covers", r"door", r"doors", r"spring", r"springs", r"faceplate",
@@ -156,7 +149,6 @@ def analyze_market(token, target):
             if "value" in ship_cost_obj:
                 inbound_ship = float(ship_cost_obj["value"])
 
-        # NEW MATH: Adding the flat $10 border fee
         subtotal = price_val + inbound_ship
         tax_est = subtotal * BUYER_TAX_RATE
         total_landed = subtotal + tax_est + IMPORT_HANDLING_FEE
@@ -225,7 +217,7 @@ def analyze_market(token, target):
     }
 
 def run_arbitrage_engine():
-    print("--- RUNNING HARDENED SCAN (IMPORT FEES ADDED) ---")
+    print("--- RUNNING HARDENED SCAN (ANTI-CRASH) ---")
     if not DISCORD_WEBHOOK.startswith("http") or not APP_ID or not CERT_ID:
         print("❌ Missing environment variables.")
         return "Config Error"
@@ -241,7 +233,9 @@ def run_arbitrage_engine():
                 results.append(res)
 
         if not results:
-            requests.post(DISCORD_WEBHOOK, json={"content": "⚠️ Scan completed: No legitimate complete units found right now."})
+            resp = requests.post(DISCORD_WEBHOOK, json={"content": "⚠️ Scan completed: No legitimate complete units found right now."})
+            if resp.status_code >= 400:
+                print(f"❌ DISCORD ERROR {resp.status_code}: {resp.text}")
             return "No Data"
 
         results.sort(key=lambda x: x["net_profit"], reverse=True)
@@ -262,9 +256,9 @@ def run_arbitrage_engine():
         for r in results:
             icon = "🟢" if r["is_snipe"] else ("💸" if not r["within_budget"] else "⚪")
             row = (
-                f"{icon} **[{r['target_name']}]({r['best']['url']})**\n"
-                f"   • Ask (with Tax/Fees): `${r['best']['total_buy_cost']:.2f}` → Target Sell: `${r['recommended_sell']:.2f}`\n"
-                f"   • Net Profit: **`${r['net_profit']:.2f} CAD`** ({r['roi_pct']}% ROI)"
+                f"{icon} **{r['target_name']}**\n"
+                f"   • Ask: `${r['best']['total_buy_cost']:.2f}` → Sell: `${r['recommended_sell']:.2f}`\n"
+                f"   • Profit: **`${r['net_profit']:.2f} CAD`** ({r['roi_pct']}% ROI)"
             )
             scoreboard_rows.append(row)
         scoreboard_text = "\n\n".join(scoreboard_rows)
@@ -280,7 +274,6 @@ def run_arbitrage_engine():
         else:
             banner = f"📊 MARKET REPORT: Best Current Deal is {top['target_name']}"
             embed_color = 3447003
-            diff = top['best']['total_buy_cost'] - top['strict_buy_ceiling']
             call_to_action = (
                 f"**RECOMMENDATION: HOLD / SUBMIT OFFER**\n"
                 f"Current ask (with taxes/fees) of `${top['best']['total_buy_cost']:.2f}` yields `${top['net_profit']:.2f}` profit. "
@@ -338,8 +331,12 @@ def run_arbitrage_engine():
         if best["image"]:
             embed["thumbnail"] = {"url": best["image"]}
 
-        requests.post(DISCORD_WEBHOOK, json={"embeds": [embed]}, timeout=15)
-        print("--- SCAN COMPLETE ---")
+        webhook_resp = requests.post(DISCORD_WEBHOOK, json={"embeds": [embed]}, timeout=15)
+        if webhook_resp.status_code >= 400:
+            print(f"❌ DISCORD ERROR {webhook_resp.status_code}: {webhook_resp.text}")
+        else:
+            print("--- SCAN COMPLETE (MESSAGE SENT) ---")
+            
         return "Success"
 
     except Exception:
@@ -354,11 +351,4 @@ class TriggerHandler(BaseHTTPRequestHandler):
         self.wfile.write(f"Bot status: {result}".encode())
 
     def do_HEAD(self):
-        self.send_response(200)
-        self.end_headers()
-
-if __name__ == "__main__":
-    run_arbitrage_engine()
-    port = int(os.environ.get("PORT", 10000))
-    server = HTTPServer(("0.0.0.0", port), TriggerHandler)
-    server.serve_forever()
+        self.send
