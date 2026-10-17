@@ -5,6 +5,7 @@ import base64
 import urllib.parse
 import traceback
 import statistics
+import threading
 import requests
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
@@ -217,7 +218,7 @@ def analyze_market(token, target):
     }
 
 def run_arbitrage_engine():
-    print("--- RUNNING HARDENED SCAN (ANTI-CRASH) ---")
+    print("--- RUNNING HARDENED SCAN ---")
     if not DISCORD_WEBHOOK.startswith("http") or not APP_ID or not CERT_ID:
         print("❌ Missing environment variables.")
         return "Config Error"
@@ -233,9 +234,7 @@ def run_arbitrage_engine():
                 results.append(res)
 
         if not results:
-            resp = requests.post(DISCORD_WEBHOOK, json={"content": "⚠️ Scan completed: No legitimate complete units found right now."})
-            if resp.status_code >= 400:
-                print(f"❌ DISCORD ERROR {resp.status_code}: {resp.text}")
+            requests.post(DISCORD_WEBHOOK, json={"content": "⚠️ Scan completed: No legitimate complete units found right now."})
             return "No Data"
 
         results.sort(key=lambda x: x["net_profit"], reverse=True)
@@ -255,6 +254,7 @@ def run_arbitrage_engine():
         scoreboard_rows = []
         for r in results:
             icon = "🟢" if r["is_snipe"] else ("💸" if not r["within_budget"] else "⚪")
+            # Removed the huge URLs from the Scoreboard so Discord doesn't crash
             row = (
                 f"{icon} **{r['target_name']}**\n"
                 f"   • Ask: `${r['best']['total_buy_cost']:.2f}` → Sell: `${r['recommended_sell']:.2f}`\n"
@@ -297,7 +297,7 @@ def run_arbitrage_engine():
                         f"   • **Total Buy Cost:** **`${best['total_buy_cost']:.2f} CAD`**\n\n"
                         f"**2. Target Resale Value:**\n"
                         f"   • Realistic Selling Price: **`${top['recommended_sell']:.2f} CAD`**\n"
-                        f"   • *(Set at the 30th percentile of {top['sample_size']} working units to ensure a fast flip)*\n\n"
+                        f"   • *(Set at the 30th percentile of {top['sample_size']} working units)*\n\n"
                         f"**3. Deductions & Selling Costs:**\n"
                         f"   • eBay Final Value Fee (13.6% + $0.30): -`${top['ebay_fee']:.2f}`\n"
                         f"   • Packaging Box & Wrap: -`${PACKAGING_COST:.2f}`\n"
@@ -335,7 +335,7 @@ def run_arbitrage_engine():
         if webhook_resp.status_code >= 400:
             print(f"❌ DISCORD ERROR {webhook_resp.status_code}: {webhook_resp.text}")
         else:
-            print("--- SCAN COMPLETE (MESSAGE SENT) ---")
+            print("--- SCAN COMPLETE (MESSAGE SENT TO DISCORD) ---")
             
         return "Success"
 
@@ -345,10 +345,22 @@ def run_arbitrage_engine():
 
 class TriggerHandler(BaseHTTPRequestHandler):
     def do_GET(self):
-        result = run_arbitrage_engine()
+        # Trigger the scan in the background so it doesn't freeze Render
+        threading.Thread(target=run_arbitrage_engine, daemon=True).start()
         self.send_response(200)
         self.end_headers()
-        self.wfile.write(f"Bot status: {result}".encode())
+        self.wfile.write(b"Bot status: Scan triggered in background")
 
     def do_HEAD(self):
-        self.send
+        self.send_response(200)
+        self.end_headers()
+
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 10000))
+    server = HTTPServer(("0.0.0.0", port), TriggerHandler)
+    print(f"--- SERVER BOOTED INSTANTLY ON PORT {port} (RENDER SATISFIED) ---")
+    
+    # Run the first scan in the background safely
+    threading.Thread(target=run_arbitrage_engine, daemon=True).start()
+    
+    server.serve_forever()
