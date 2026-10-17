@@ -254,7 +254,6 @@ def run_arbitrage_engine():
         scoreboard_rows = []
         for r in results:
             icon = "🟢" if r["is_snipe"] else ("💸" if not r["within_budget"] else "⚪")
-            # Removed the huge URLs from the Scoreboard so Discord doesn't crash
             row = (
                 f"{icon} **{r['target_name']}**\n"
                 f"   • Ask: `${r['best']['total_buy_cost']:.2f}` → Sell: `${r['recommended_sell']:.2f}`\n"
@@ -274,10 +273,19 @@ def run_arbitrage_engine():
         else:
             banner = f"📊 MARKET REPORT: Best Current Deal is {top['target_name']}"
             embed_color = 3447003
+            
+            # DYNAMIC REASONING FOR DISCORD TEXT
+            if top['strict_buy_ceiling'] == MAX_BUDGET_CAD:
+                reason = f"stay within your strict `${MAX_BUDGET_CAD:.0f}` budget"
+            elif top['strict_buy_ceiling'] == round(top['net_payout'] - MIN_PROFIT_CAD, 2):
+                reason = f"hit your `${MIN_PROFIT_CAD:.0f}` minimum profit target"
+            else:
+                reason = f"hit your `{MIN_ROI_PCT}%` minimum ROI target"
+
             call_to_action = (
                 f"**RECOMMENDATION: HOLD / SUBMIT OFFER**\n"
                 f"Current ask (with taxes/fees) of `${top['best']['total_buy_cost']:.2f}` yields `${top['net_profit']:.2f}` profit. "
-                f"To hit your `${MIN_PROFIT_CAD:.0f}` profit target, offer **`${top['strict_buy_ceiling']:.2f} CAD`** total."
+                f"To {reason}, offer **`${top['strict_buy_ceiling']:.2f} CAD`** total."
             )
 
         embed = {
@@ -345,7 +353,6 @@ def run_arbitrage_engine():
 
 class TriggerHandler(BaseHTTPRequestHandler):
     def do_GET(self):
-        # Trigger the scan in the background so it doesn't freeze Render
         threading.Thread(target=run_arbitrage_engine, daemon=True).start()
         self.send_response(200)
         self.end_headers()
@@ -360,7 +367,6 @@ if __name__ == "__main__":
     server = HTTPServer(("0.0.0.0", port), TriggerHandler)
     print(f"--- SERVER BOOTED INSTANTLY ON PORT {port} (RENDER SATISFIED) ---")
     
-    # Run the first scan in the background safely
     threading.Thread(target=run_arbitrage_engine, daemon=True).start()
     
     server.serve_forever()
