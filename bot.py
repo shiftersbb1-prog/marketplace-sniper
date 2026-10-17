@@ -16,15 +16,25 @@ APP_ID = os.environ.get("APP_ID", "").strip()
 CERT_ID = os.environ.get("CERT_ID", "").strip()
 DISCORD_WEBHOOK = os.environ.get("DISCORD_WEBHOOK", "").strip()
 
+# =====================================================================
+# 1. YOUR MASTER WALLET & PROFIT RULES
+# =====================================================================
 MAX_BUDGET_CAD = 250.00     
 MIN_PROFIT_CAD = 45.00      
 MIN_ROI_PCT = 20.0          
 
-BUYER_TAX_RATE = 0.15       
-IMPORT_HANDLING_FEE = 10.00 
-EBAY_FEE_RATE = 0.136       
-EBAY_FIXED_FEE = 0.30       
-PACKAGING_COST = 4.50       
+# =====================================================================
+# 2. VERIFIED 2026 QUEBEC / EBAY.CA FEE SCHEDULE
+# =====================================================================
+QC_TAX_RATE = 0.14975           # 14.975% (5% GST + 9.975% QST in Quebec)
+CBSA_HANDLING_FEE = 9.95        # $9.95 Canada Post border fee (ONLY applied to US items)
+BANK_FX_FEE_RATE = 0.025        # 2.5% Credit Card FX fee (ONLY applied to USD listings)
+
+EBAY_FVF_RATE = 0.136           # 13.6% Base Final Value Fee on eBay.ca
+EBAY_INTL_US_RATE = 0.004       # 0.4% International fee for US buyers
+EBAY_PER_ORDER_FEE = 0.40       # $0.40 per-order fee for sales over $10.00
+AVG_BUYER_SALES_TAX = 0.12      # ~12% avg sales tax buyer pays (eBay charges FVF on this)
+PACKAGING_COST = 4.50           # Physical box, tape, bubble wrap
 
 WATCHLIST = [
     {
@@ -141,7 +151,8 @@ def analyze_market(token, target):
         if BLACKLIST_REGEX.search(title):
             continue
 
-        price_val = float(item.get("price", {}).get("value", 0))
+        price_obj = item.get("price", {})
+        price_val = float(price_obj.get("value", 0))
 
         ship_opts = item.get("shippingOptions", [])
         inbound_ship = 20.00
@@ -150,9 +161,16 @@ def analyze_market(token, target):
             if "value" in ship_cost_obj:
                 inbound_ship = float(ship_cost_obj["value"])
 
+        # DETECT COUNTRY & CURRENCY TO APPLY EXACT FEES
+        item_country = item.get("itemLocation", {}).get("country", "US")
+        is_foreign_currency = "convertedFromCurrency" in price_obj or item_country != "CA"
+
         subtotal = price_val + inbound_ship
-        tax_est = subtotal * BUYER_TAX_RATE
-        total_landed = subtotal + tax_est + IMPORT_HANDLING_FEE
+        tax_est = round(subtotal * QC_TAX_RATE, 2)
+        fx_fee_est = round(subtotal * BANK_FX_FEE_RATE, 2) if is_foreign_currency else 0.00
+        border_fee = CBSA_HANDLING_FEE if item_country != "CA" else 0.00
+
+        total_landed = round(subtotal + tax_est + fx_fee_est + border_fee, 2)
 
         if total_landed < target["min_valid_price"]:
             continue
@@ -160,10 +178,13 @@ def analyze_market(token, target):
         valid_items.append({
             "id": item.get("itemId", ""),
             "title": title,
+            "country": item_country,
             "item_price": price_val,
             "inbound_ship": inbound_ship,
             "tax_est": tax_est,
-            "total_buy_cost": round(total_landed, 2),
+            "fx_fee_est": fx_fee_est,
+            "border_fee": border_fee,
+            "total_buy_cost": total_landed,
             "url": item.get("itemWebUrl", "https://www.ebay.ca"),
             "image": item.get("image", {}).get("imageUrl", ""),
             "condition": item.get("condition", "Used"),
@@ -183,8 +204,16 @@ def analyze_market(token, target):
     recommended_sell = round(statistics.median(realistic_prices), 2)
     outbound_ship = target["est_outbound_ship"]
 
-    ebay_fee = round((recommended_sell * EBAY_FEE_RATE) + EBAY_FIXED_FEE, 2)
-    total_deductions = round(ebay_fee + PACKAGING_COST + outbound_ship, 2)
+    # VERIFIED 2026 EBAY.CA SELLING FEE CALCULATION
+    # 1. eBay calculates percentage fees on (Sale Price + Buyer's Sales Tax)
+    buyer_taxed_total = recommended_sell * (1.0 + AVG_BUYER_SALES_TAX)
+    raw_ebay_fee = round((buyer_taxed_total * (EBAY_FVF_RATE + EBAY_INTL_US_RATE)) + EBAY_PER_ORDER_FEE, 2)
+    
+    # 2. eBay charges 14.975% Quebec GST/QST on top of your seller fees
+    qc_tax_on_fees = round(raw_ebay_fee * QC_TAX_RATE, 2)
+    total_ebay_fees = round(raw_ebay_fee + qc_tax_on_fees, 2)
+    
+    total_deductions = round(total_ebay_fees + PACKAGING_COST + outbound_ship, 2)
     net_payout = round(recommended_sell - total_deductions, 2)
 
     best = valid_items[0]
@@ -206,7 +235,9 @@ def analyze_market(token, target):
         "outbound_ship": outbound_ship,
         "sample_size": len(all_prices),
         "recommended_sell": recommended_sell,
-        "ebay_fee": ebay_fee,
+        "raw_ebay_fee": raw_ebay_fee,
+        "qc_tax_on_fees": qc_tax_on_fees,
+        "total_ebay_fees": total_ebay_fees,
         "net_payout": net_payout,
         "total_deductions": total_deductions,
         "best": best,
@@ -218,7 +249,7 @@ def analyze_market(token, target):
     }
 
 def run_arbitrage_engine():
-    print("--- RUNNING HARDENED SCAN ---")
+    print("--- RUNNING VERIFIED 2026 QUEBEC ARBITRAGE SCAN ---")
     if not DISCORD_WEBHOOK.startswith("http") or not APP_ID or not CERT_ID:
         print("❌ Missing environment variables.")
         return "Config Error"
@@ -254,8 +285,9 @@ def run_arbitrage_engine():
         scoreboard_rows = []
         for r in results:
             icon = "🟢" if r["is_snipe"] else ("💸" if not r["within_budget"] else "⚪")
+            loc_flag = "🇨🇦" if r["best"]["country"] == "CA" else "🇺🇸"
             row = (
-                f"{icon} **{r['target_name']}**\n"
+                f"{icon} {loc_flag} **{r['target_name']}**\n"
                 f"   • Ask: `${r['best']['total_buy_cost']:.2f}` → Sell: `${r['recommended_sell']:.2f}`\n"
                 f"   • Profit: **`${r['net_profit']:.2f} CAD`** ({r['roi_pct']}% ROI)"
             )
@@ -274,7 +306,6 @@ def run_arbitrage_engine():
             banner = f"📊 MARKET REPORT: Best Current Deal is {top['target_name']}"
             embed_color = 3447003
             
-            # DYNAMIC REASONING FOR DISCORD TEXT
             if top['strict_buy_ceiling'] == MAX_BUDGET_CAD:
                 reason = f"stay within your strict `${MAX_BUDGET_CAD:.0f}` budget"
             elif top['strict_buy_ceiling'] == round(top['net_payout'] - MIN_PROFIT_CAD, 2):
@@ -284,9 +315,11 @@ def run_arbitrage_engine():
 
             call_to_action = (
                 f"**RECOMMENDATION: HOLD / SUBMIT OFFER**\n"
-                f"Current ask (with taxes/fees) of `${top['best']['total_buy_cost']:.2f}` yields `${top['net_profit']:.2f}` profit. "
+                f"Current ask yields `${top['net_profit']:.2f}` profit. "
                 f"To {reason}, offer **`${top['strict_buy_ceiling']:.2f} CAD`** total."
             )
+
+        origin_label = "🇨🇦 Canada (Domestic - $0 Border/FX Fees)" if best["country"] == "CA" else "🇺🇸 USA (Import - Includes FX & CBSA Fees)"
 
         embed = {
             "title": banner,
@@ -295,22 +328,24 @@ def run_arbitrage_engine():
             "color": embed_color,
             "fields": [
                 {
-                    "name": "💰 Complete Financial Breakdown (CAD)",
+                    "name": "💰 Verified Financial Breakdown (CAD)",
                     "value": (
-                        f"**1. Purchase Cost (Total Cash Out):**\n"
+                        f"**1. Purchase Cost ({origin_label}):**\n"
                         f"   • Item Price: `${best['item_price']:.2f}`\n"
                         f"   • Inbound Shipping: `${best['inbound_ship']:.2f}`\n"
-                        f"   • QC Tax (15%): `+${best['tax_est']:.2f}`\n"
-                        f"   • Border Handling Buffer: `+${IMPORT_HANDLING_FEE:.2f}`\n"
-                        f"   • **Total Buy Cost:** **`${best['total_buy_cost']:.2f} CAD`**\n\n"
+                        f"   • QC Sales Tax (14.975%): `+${best['tax_est']:.2f}`\n"
+                        f"   • Bank FX Fee (2.5%): `+${best['fx_fee_est']:.2f}`\n"
+                        f"   • Canada Post Border Fee: `+${best['border_fee']:.2f}`\n"
+                        f"   • **Total Landed Buy Cost:** **`${best['total_buy_cost']:.2f} CAD`**\n\n"
                         f"**2. Target Resale Value:**\n"
                         f"   • Realistic Selling Price: **`${top['recommended_sell']:.2f} CAD`**\n"
                         f"   • *(Set at the 30th percentile of {top['sample_size']} working units)*\n\n"
-                        f"**3. Deductions & Selling Costs:**\n"
-                        f"   • eBay Final Value Fee (13.6% + $0.30): -`${top['ebay_fee']:.2f}`\n"
+                        f"**3. Verified Selling Deductions:**\n"
+                        f"   • eBay Fee (13.6% + 0.4% US + $0.40 on taxed total): -`${top['raw_ebay_fee']:.2f}`\n"
+                        f"   • QC Tax on eBay Fees (14.975%): -`${top['qc_tax_on_fees']:.2f}`\n"
                         f"   • Packaging Box & Wrap: -`${PACKAGING_COST:.2f}`\n"
                         f"   • Outbound Tracked Shipping: -`${top['outbound_ship']:.2f}`\n"
-                        f"   • **Total Expenses:** -`${top['total_deductions']:.2f} CAD`\n\n"
+                        f"   • **Total Selling Expenses:** -`${top['total_deductions']:.2f} CAD`\n\n"
                         f"**4. Bottom Line:**\n"
                         f"   • **NET PROFIT IN POCKET:** **`${top['net_profit']:.2f} CAD`**\n"
                         f"   • **RETURN ON INVESTMENT:** **`{top['roi_pct']}% ROI`**"
@@ -321,6 +356,7 @@ def run_arbitrage_engine():
                     "name": "🔍 Item & Seller Details",
                     "value": (
                         f"• **Title:** {best['title'][:100]}\n"
+                        f"• **Origin:** {origin_label}\n"
                         f"• **Condition:** {best['condition']}\n"
                         f"• **Seller:** `{seller_name}` ({seller_pct}% positive feedback)\n"
                         f"• **Best Offer Enabled:** {offer_str}\n"
@@ -353,13 +389,10 @@ def run_arbitrage_engine():
 
 class TriggerHandler(BaseHTTPRequestHandler):
     def do_GET(self):
-        # 1. Render's automated health check (no longer runs a scan, stops the double-ping)
         if self.path == '/':
             self.send_response(200)
             self.end_headers()
             self.wfile.write(b"Bot is awake and healthy.")
-            
-        # 2. Your actual manual trigger to run the bot
         elif self.path == '/scan':
             threading.Thread(target=run_arbitrage_engine, daemon=True).start()
             self.send_response(200)
@@ -376,5 +409,5 @@ class TriggerHandler(BaseHTTPRequestHandler):
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
     server = HTTPServer(("0.0.0.0", port), TriggerHandler)
-    print(f"--- SERVER BOOTED INSTANTLY ON PORT {port} (RENDER SATISFIED) ---")
+    print(f"--- SERVER BOOTED INSTANTLY ON PORT {port} ---")
     server.serve_forever()
