@@ -353,10 +353,21 @@ def run_arbitrage_engine():
 
 class TriggerHandler(BaseHTTPRequestHandler):
     def do_GET(self):
-        threading.Thread(target=run_arbitrage_engine, daemon=True).start()
-        self.send_response(200)
-        self.end_headers()
-        self.wfile.write(b"Bot status: Scan triggered in background")
+        # 1. Render's automated health check (no longer runs a scan, stops the double-ping)
+        if self.path == '/':
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"Bot is awake and healthy.")
+            
+        # 2. Your actual manual trigger to run the bot
+        elif self.path == '/scan':
+            threading.Thread(target=run_arbitrage_engine, daemon=True).start()
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"Bot status: Scan triggered in background")
+        else:
+            self.send_response(404)
+            self.end_headers()
 
     def do_HEAD(self):
         self.send_response(200)
@@ -366,7 +377,4 @@ if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
     server = HTTPServer(("0.0.0.0", port), TriggerHandler)
     print(f"--- SERVER BOOTED INSTANTLY ON PORT {port} (RENDER SATISFIED) ---")
-    
-    threading.Thread(target=run_arbitrage_engine, daemon=True).start()
-    
     server.serve_forever()
